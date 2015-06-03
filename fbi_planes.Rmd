@@ -1,0 +1,170 @@
+---
+title: "FBI Surveillance Aircraft"
+author: "Brian Abelson"
+date: "June 3, 2015"
+output: html_document
+---
+
+
+## Data Source
+
+We fetched the most up-to-date data from the [FAA Aircraft Registry](http://www.faa.gov/licenses_certificates/aircraft_certification/aircraft_registry/).
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+wd <- '/Users/brianabelson/enigma/public/fbi-planes/'
+setwd(wd)
+library('ggplot2')
+library('lubridate')
+library('plyr')
+library('extrafont')
+library('knitr')
+d <- read.csv('data/faa-registry-master-clean.csv', as.is=T)
+# standardize N Number
+d$n_number <- paste0("N", as.character(d$n_number))
+```
+
+## Detecting FBI Planes
+
+From our [initial analysis](http://blog.enigma.io/track-84-aircrafts-the-fbi-uses-for-surveillance/) and [John Wiseman's](https://twitter.com/lemonodor) [google spreadsheet](https://docs.google.com/spreadsheets/d/1z3gEODujLqIHhoKRxGuUrTA7n2gVX535_1dJCgVMDxY/edit#gid=0), 
+we collected the following list of suspected FBI shell companies:
+
+```{r}
+fbi_registrants <- c(
+  "OBR LEASING",
+  "KQM AVIATION",
+  "OTV LEASING",
+  "NBY PRODUCTIONS",
+  "PXW SERVICES",
+  "PSL SURVEYS",
+  "NG RESEARCH",
+  "FVX RESEARCH",
+  "RKT PRODUCTIONS",
+  "LCB LEASING",
+  "NBR AVIATION",
+  "KLJ AVIATION",
+  "OTV LEASING",
+  "YAMASEC USA LLC",
+  "PSL SURVEYS",
+  "AV FLIGHT INC",
+  "NATIONAL AIRCRAFT LEASING CORP",
+  "AIRCRAFT ASSOCIATES INC",
+  "WORLDWIDE AIRCRAFT LEASING CORP",
+  "AEROGRAPHICS INC"
+)
+```
+
+
+To detect potential planes, we first filter out all records that match these registrant names:
+
+```{r}
+# initial crop
+fbi_planes <- d[d$name %in% fbi_registrants, ]
+```
+
+Next, we expand our search to all addresses which exactly match the addresses in the initial set:
+
+```{r}
+mk_address_string <- function(x) {
+  paste(x$street, x$street2, x$city, x$state, x$zip)
+}
+
+# list of strings for exact matching
+fbi_address_strings <- mk_address_string(fbi_planes)
+all_address_strings <- mk_address_string(d)
+
+# find more with exact same addresses 
+fbi_planes <- d[all_address_strings %in% fbi_address_strings, ]
+```
+
+Here's a final list of suspected FBI Shell Companies:
+
+```{r}
+t <- as.data.frame(table(fbi_planes$name))
+names(t) <- c('Name', 'Plane_Count')
+t <- t[order(t$Plane_Count, decreasing=T), ]
+kable(t)
+```
+
+## Trend Analysis / Plane Models
+
+Here are some basic plots of when planes we're registered / last acted upon:
+
+```{r echo=F}
+require(ggplot2)
+
+theme_enigma <- function(base_size = 14, base_family = "Avenir Light", ticks = FALSE) {
+  ## TODO: start with theme_minimal
+  ret <- theme_bw(
+    base_family = base_family, 
+    base_size = base_size) + 
+    theme(
+      legend.background = element_blank(), 
+      legend.key = element_blank(), 
+      panel.background = element_blank(), 
+      panel.border = element_blank(), 
+      strip.background = element_blank(), 
+      plot.background = element_blank(), 
+      axis.line = element_blank()
+    )
+  if (!ticks) {
+    ret <- ret + theme(axis.ticks = element_blank())
+  }
+  ret
+} 
+## colors
+BLUE <- '#288cd2'
+RED <- '#eb3f25'
+TEAL <- '#00b495'
+```
+
+It seems like most of the planes were registered in 2010.
+
+```{r, fig.height=5, fig.width=8, warning=FALSE}
+fbi_planes$cert_issue_date <- ymd(fbi_planes$cert_issue_date)
+fbi_planes$cert_date_month <- floor_date(fbi_planes$cert_issue_date, "month")
+
+cert_by_month <- ddply(fbi_planes, "cert_date_month", summarize, count=length(cert_date_month))
+cert_by_month$cumsum <- cumsum(cert_by_month$count)
+
+ggplot(cert_by_month, aes(x=cert_date_month, y=cumsum)) + 
+  geom_area(fill=BLUE) + 
+  theme_enigma() + 
+  xlab('Certification Date') + 
+  ylab('Total Planes') + 
+  labs(title='FBI Planes By Certification Date')
+```
+
+Most of the planes have been active in the past three years:
+
+```{r, fig.height=5, fig.width=8, warning=FALSE}
+fbi_planes$last_action_date <- ymd(fbi_planes$last_action_date)
+fbi_planes$last_action_date_month <- floor_date(fbi_planes$last_action_date, "month")
+
+last_action_by_month <- ddply(fbi_planes, "last_action_date_month", summarize, count=length(last_action_date_month))
+
+ggplot(last_action_by_month, aes(x=last_action_date_month, y=count)) + 
+  geom_bar(fill=BLUE, stat='identity') + 
+  theme_enigma() + 
+  xlab('Date of Last Action') + 
+  ylab('Count') + 
+  labs(title='FBI Planes By Date of Last Action')
+```
+
+Top 5 Plane Models:
+
+```{r kable}
+model_counts <- ddply(fbi_planes, "mfr_mdl_code", summarise, count=length(mfr_mdl_code))
+model_counts$mfr_mdl_code[model_counts$mfr_mdl_code=='2072703'] <- "CESSNA 182T"
+model_counts$mfr_mdl_code[model_counts$mfr_mdl_code=='2073301'] <- "CESSNA 206H"
+model_counts$mfr_mdl_code[model_counts$mfr_mdl_code=='2073303'] <- "CESSNA T206H"
+model_counts$mfr_mdl_code[model_counts$mfr_mdl_code=='2073701'] <- "CESSNA 208B"
+model_counts$mfr_mdl_code[model_counts$mfr_mdl_code=='1182206'] <- "BELL 407"
+
+model_counts <- model_counts[order(model_counts$count, decreasing=T), ]
+kable(head(model_counts, 5))
+```
+
+```{r echo=FALSE}
+# write planes to csv.
+write.csv(fbi_planes, 'data/fbi-planes.csv', row.names=F)
+```
